@@ -4303,36 +4303,27 @@ mod handlers {
 
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
 
-        let rollout_path = {
+        let rollout = {
             let guard = sess.services.rollout.lock().await;
-            guard
-                .as_ref()
-                .map(|recorder| recorder.rollout_path().to_path_buf())
+            guard.as_ref().cloned()
         };
-        let reconstructed_rollout = if let Some(rollout_path) = rollout_path {
-            sess.ensure_rollout_materialized().await;
-            sess.flush_rollout().await;
-
-            match crate::RolloutRecorder::load_rollout_items(&rollout_path).await {
-                Ok((rollout_items, _, _)) if !rollout_items.is_empty() => {
-                    let mut reconstruction_state =
-                        crate::codex::rollout_reconstruction::RolloutReconstructionState::new(
-                            rollout_items,
-                        );
-                    reconstruction_state.apply_backtracking(turn_context.as_ref(), num_turns);
-                    Some(
-                        sess.reconstruct_history_from_rollout_state(
-                            turn_context.as_ref(),
-                            &reconstruction_state,
-                        )
-                        .await,
+        let reconstructed_rollout = if let Some(rollout) = rollout {
+            let rollout_items = rollout.live_items.read().await.clone();
+            if rollout_items.is_empty() {
+                None
+            } else {
+                let mut reconstruction_state =
+                    crate::codex::rollout_reconstruction::RolloutReconstructionState::new(
+                        rollout_items,
+                    );
+                reconstruction_state.apply_backtracking(turn_context.as_ref(), num_turns);
+                Some(
+                    sess.reconstruct_history_from_rollout_state(
+                        turn_context.as_ref(),
+                        &reconstruction_state,
                     )
-                }
-                Ok(_) => None,
-                Err(err) => {
-                    warn!("failed to reload rollout for thread rollback: {err}");
-                    None
-                }
+                    .await,
+                )
             }
         } else {
             None
@@ -7624,8 +7615,6 @@ mod tests {
             })),
         ];
         sess.persist_rollout_items(&rollout_items).await;
-        sess.ensure_rollout_materialized().await;
-        sess.flush_rollout().await;
 
         let mut latest_history = turn_1.clone();
         latest_history.extend(turn_2);
