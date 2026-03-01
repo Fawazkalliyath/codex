@@ -99,7 +99,7 @@ impl InMemoryReverseRolloutSource {
 }
 
 #[derive(Clone, Debug)]
-struct ReplaySlice {
+struct ResolvedReplayState {
     base_history: Vec<ResponseItem>,
     // Forward replay starts after the rollout item that established `base_history`.
     rollout_suffix_start: RolloutIndex,
@@ -113,29 +113,18 @@ struct ReplaySlice {
 #[derive(Clone, Debug)]
 pub(super) struct RolloutReconstructionState {
     source: InMemoryReverseRolloutSource,
-    // Materialized history that is already known to survive. After backtracking inside the
-    // current visible history, we absorb that visible history into this base and make the suffix
-    // empty. If later backtracking needs older hidden turns, reverse replay resumes before
-    // `reverse_resume_index`.
-    base_history: Vec<ResponseItem>,
-    rollout_suffix_start: RolloutIndex,
-    // Reverse scans that need older hidden history should continue before this position.
-    reverse_resume_index: RolloutIndex,
-    previous_model: Option<String>,
-    reference_context_item: Option<TurnContextItem>,
+    // Materialized history that is already known to survive plus the replay metadata and reverse
+    // boundary needed to continue uncovering older hidden history after later backtracking.
+    replay_state: ResolvedReplayState,
 }
 
 impl RolloutReconstructionState {
     pub(super) fn new(rollout_items: Vec<RolloutItem>) -> Self {
         let source = InMemoryReverseRolloutSource::new(rollout_items);
-        let replay_slice = resolve_replay_slice(&source, source.end_index(), 0);
+        let replay_state = resolve_replay_state(&source, source.end_index(), 0);
         Self {
             source,
-            base_history: replay_slice.base_history,
-            rollout_suffix_start: replay_slice.rollout_suffix_start,
-            reverse_resume_index: replay_slice.reverse_resume_index,
-            previous_model: replay_slice.previous_model,
-            reference_context_item: replay_slice.reference_context_item,
+            replay_state,
         }
     }
 
@@ -157,7 +146,7 @@ impl RolloutReconstructionState {
         let additional_user_turns = usize::try_from(additional_user_turns).unwrap_or(usize::MAX);
 
         if additional_user_turns < visible_user_turns {
-            let replay_slice = resolve_replay_slice(
+            let replay_state = resolve_replay_state(
                 &self.source,
                 current_end,
                 u32::try_from(additional_user_turns).unwrap_or(u32::MAX),
@@ -167,34 +156,34 @@ impl RolloutReconstructionState {
             history
                 .drop_last_n_user_turns(u32::try_from(additional_user_turns).unwrap_or(u32::MAX));
 
-            self.base_history = history.raw_items().to_vec();
-            self.rollout_suffix_start = current_end;
+            self.replay_state.base_history = history.raw_items().to_vec();
+            self.replay_state.rollout_suffix_start = current_end;
             // Older hidden history still begins before the same reverse boundary. If a later
             // backtrack needs to move before this newly materialized base, resume the reverse scan
             // from the older boundary we had already discovered.
-            self.previous_model = replay_slice.previous_model;
-            self.reference_context_item = replay_slice.reference_context_item;
+            self.replay_state.previous_model = replay_state.previous_model;
+            self.replay_state.reference_context_item = replay_state.reference_context_item;
             return;
         }
 
         let remaining_user_turns = additional_user_turns.saturating_sub(visible_user_turns);
-        let replay_slice = resolve_replay_slice(
+        let replay_state = resolve_replay_state(
             &self.source,
-            self.reverse_resume_index,
+            self.replay_state.reverse_resume_index,
             u32::try_from(remaining_user_turns).unwrap_or(u32::MAX),
         );
         let reconstructed = reconstruct_history_until(
             turn_context,
             &self.source,
-            &replay_slice,
-            self.reverse_resume_index,
+            &replay_state,
+            self.replay_state.reverse_resume_index,
         );
 
-        self.base_history = reconstructed.history;
-        self.rollout_suffix_start = current_end;
-        self.reverse_resume_index = replay_slice.reverse_resume_index;
-        self.previous_model = replay_slice.previous_model;
-        self.reference_context_item = reconstructed.reference_context_item;
+        self.replay_state.base_history = reconstructed.history;
+        self.replay_state.rollout_suffix_start = current_end;
+        self.replay_state.reverse_resume_index = replay_state.reverse_resume_index;
+        self.replay_state.previous_model = replay_state.previous_model;
+        self.replay_state.reference_context_item = reconstructed.reference_context_item;
     }
 
     fn reconstruct_history(
@@ -202,18 +191,7 @@ impl RolloutReconstructionState {
         turn_context: &TurnContext,
         end_index: RolloutIndex,
     ) -> RolloutReconstruction {
-        reconstruct_history_until(
-            turn_context,
-            &self.source,
-            &ReplaySlice {
-                base_history: self.base_history.clone(),
-                rollout_suffix_start: self.rollout_suffix_start,
-                reverse_resume_index: self.reverse_resume_index,
-                previous_model: self.previous_model.clone(),
-                reference_context_item: self.reference_context_item.clone(),
-            },
-            end_index,
-        )
+        reconstruct_history_until(turn_context, &self.source, &self.replay_state, end_index)
     }
 }
 
@@ -251,7 +229,7 @@ fn turn_ids_are_compatible(active_turn_id: Option<&str>, item_turn_id: Option<&s
 
 fn finalize_active_segment(
     active_segment: ActiveReplaySegment,
-    replay_slice: &mut Option<ReplaySlice>,
+    replay_state: &mut Option<ResolvedReplayState>,
     previous_model: &mut Option<String>,
     reference_context_item: &mut TurnReferenceContextItem,
     pending_rollback_turns: &mut usize,
@@ -293,7 +271,7 @@ fn finalize_active_segment(
         *reference_context_item = segment_reference_context_item;
     }
 
-    if replay_slice.is_none()
+    if replay_state.is_none()
         && let Some(replacement_history) = base_replacement_history
     {
         let newest_rollout_index = match newest_rollout_index {
@@ -304,7 +282,7 @@ fn finalize_active_segment(
             Some(index) => index,
             None => panic!("active replay segment should contain rollout items"),
         };
-        *replay_slice = Some(ReplaySlice {
+        *replay_state = Some(ResolvedReplayState {
             base_history: replacement_history,
             rollout_suffix_start: RolloutIndex(newest_rollout_index.0 + 1),
             reverse_resume_index: oldest_rollout_index,
@@ -314,15 +292,15 @@ fn finalize_active_segment(
     }
 }
 
-fn resolve_replay_slice(
+fn resolve_replay_state(
     source: &InMemoryReverseRolloutSource,
     end_index: RolloutIndex,
     additional_user_turns: u32,
-) -> ReplaySlice {
+) -> ResolvedReplayState {
     // Shared reverse scan for both startup reconstruction and later backtracking. It finds the
     // newest surviving compaction replacement (or start of file) and the replay metadata that
     // should accompany forward materialization from that point.
-    let mut replay_slice = None;
+    let mut replay_state = None;
     let mut previous_model = None;
     let mut reference_context_item = TurnReferenceContextItem::NeverSet;
     let mut pending_rollback_turns = usize::try_from(additional_user_turns).unwrap_or(usize::MAX);
@@ -331,7 +309,7 @@ fn resolve_replay_slice(
     for (item_index, item) in source.iter_reverse_from(end_index) {
         if active_segment.is_none()
             && pending_rollback_turns == 0
-            && replay_slice.is_some()
+            && replay_state.is_some()
             && previous_model.is_some()
             && !matches!(reference_context_item, TurnReferenceContextItem::NeverSet)
         {
@@ -354,7 +332,7 @@ fn resolve_replay_slice(
                 {
                     finalize_active_segment(
                         active_segment,
-                        &mut replay_slice,
+                        &mut replay_state,
                         &mut previous_model,
                         &mut reference_context_item,
                         &mut pending_rollback_turns,
@@ -434,7 +412,7 @@ fn resolve_replay_slice(
     if let Some(active_segment) = active_segment.take() {
         finalize_active_segment(
             active_segment,
-            &mut replay_slice,
+            &mut replay_state,
             &mut previous_model,
             &mut reference_context_item,
             &mut pending_rollback_turns,
@@ -448,29 +426,29 @@ fn resolve_replay_slice(
         }
     };
 
-    let mut replay_slice = replay_slice.unwrap_or(ReplaySlice {
+    let mut replay_state = replay_state.unwrap_or(ResolvedReplayState {
         base_history: Vec::new(),
         rollout_suffix_start: source.start_index(),
         reverse_resume_index: source.start_index(),
         previous_model: None,
         reference_context_item: None,
     });
-    replay_slice.previous_model = previous_model;
-    replay_slice.reference_context_item = reference_context_item;
-    replay_slice
+    replay_state.previous_model = previous_model;
+    replay_state.reference_context_item = reference_context_item;
+    replay_state
 }
 
 fn reconstruct_history_until(
     turn_context: &TurnContext,
     source: &InMemoryReverseRolloutSource,
-    replay_slice: &ReplaySlice,
+    replay_state: &ResolvedReplayState,
     end_index: RolloutIndex,
 ) -> RolloutReconstruction {
     let mut history = ContextManager::new();
     let mut saw_legacy_compaction_without_replacement_history = false;
-    history.replace(replay_slice.base_history.clone());
+    history.replace(replay_state.base_history.clone());
 
-    for (rollout_index, item) in source.iter_forward_from(replay_slice.rollout_suffix_start) {
+    for (rollout_index, item) in source.iter_forward_from(replay_state.rollout_suffix_start) {
         if rollout_index.0 >= end_index.0 {
             break;
         }
@@ -507,12 +485,12 @@ fn reconstruct_history_until(
     let reference_context_item = if saw_legacy_compaction_without_replacement_history {
         None
     } else {
-        replay_slice.reference_context_item.clone()
+        replay_state.reference_context_item.clone()
     };
 
     RolloutReconstruction {
         history: history.raw_items().to_vec(),
-        previous_model: replay_slice.previous_model.clone(),
+        previous_model: replay_state.previous_model.clone(),
         reference_context_item,
     }
 }
