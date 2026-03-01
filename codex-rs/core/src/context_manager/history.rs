@@ -204,26 +204,31 @@ impl ContextManager {
     /// - if there are no user turns, this is a no-op
     /// - if `num_turns` exceeds the number of user turns, all user turns are dropped while
     ///   preserving any items that occurred before the first user message.
-    pub(crate) fn drop_last_n_user_turns(&mut self, num_turns: u32) {
+    ///
+    /// Returns the remaining number of user turns that could not be dropped because the history
+    /// was exhausted.
+    pub(crate) fn drop_last_n_user_turns(&mut self, num_turns: u32) -> u32 {
         if num_turns == 0 {
-            return;
+            return 0;
         }
 
         let snapshot = self.items.clone();
         let user_positions = user_message_positions(&snapshot);
         let Some(&first_user_idx) = user_positions.first() else {
             self.replace(snapshot);
-            return;
+            return num_turns;
         };
 
         let n_from_end = usize::try_from(num_turns).unwrap_or(usize::MAX);
-        let cut_idx = if n_from_end >= user_positions.len() {
-            first_user_idx
+        let (cut_idx, remaining_turns) = if n_from_end >= user_positions.len() {
+            let dropped_turns = u32::try_from(user_positions.len()).unwrap_or(u32::MAX);
+            (first_user_idx, num_turns.saturating_sub(dropped_turns))
         } else {
-            user_positions[user_positions.len() - n_from_end]
+            (user_positions[user_positions.len() - n_from_end], 0)
         };
 
         self.replace(snapshot[..cut_idx].to_vec());
+        remaining_turns
     }
 
     pub(crate) fn update_token_info(

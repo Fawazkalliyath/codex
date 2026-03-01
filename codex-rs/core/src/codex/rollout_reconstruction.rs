@@ -133,29 +133,19 @@ impl RolloutReconstructionState {
         turn_context: &TurnContext,
         additional_user_turns: u32,
     ) {
-        // Backtracking first tries to satisfy the request inside the currently materialized
-        // history. If that exhausts the visible suffix, resume reverse replay before the older
-        // hidden boundary and rebuild a new base from there.
         let current_end = self.source.end_index();
         let current_reconstruction = self.reconstruct_history(turn_context, current_end);
-        let visible_user_turns = current_reconstruction
-            .history
-            .iter()
-            .filter(|item| crate::context_manager::is_user_turn_boundary(item))
-            .count();
-        let additional_user_turns = usize::try_from(additional_user_turns).unwrap_or(usize::MAX);
+        let mut history = ContextManager::new();
+        history.replace(current_reconstruction.history);
+        let remaining_user_turns = history.drop_last_n_user_turns(additional_user_turns);
+        let has_older_hidden_history =
+            self.replay_state.reverse_resume_index != self.source.start_index();
 
-        if additional_user_turns < visible_user_turns {
-            let replay_state = resolve_replay_state(
-                &self.source,
-                current_end,
-                u32::try_from(additional_user_turns).unwrap_or(u32::MAX),
-            );
-            let mut history = ContextManager::new();
-            history.replace(current_reconstruction.history);
-            history
-                .drop_last_n_user_turns(u32::try_from(additional_user_turns).unwrap_or(u32::MAX));
-
+        if remaining_user_turns == 0
+            && (!history.raw_items().is_empty() || !has_older_hidden_history)
+        {
+            let replay_state =
+                resolve_replay_state(&self.source, current_end, additional_user_turns);
             self.replay_state.base_history = history.raw_items().to_vec();
             self.replay_state.rollout_suffix_start = current_end;
             // Older hidden history still begins before the same reverse boundary. If a later
@@ -166,11 +156,10 @@ impl RolloutReconstructionState {
             return;
         }
 
-        let remaining_user_turns = additional_user_turns.saturating_sub(visible_user_turns);
         let replay_state = resolve_replay_state(
             &self.source,
             self.replay_state.reverse_resume_index,
-            u32::try_from(remaining_user_turns).unwrap_or(u32::MAX),
+            remaining_user_turns,
         );
         let reconstructed = reconstruct_history_until(
             turn_context,

@@ -572,7 +572,7 @@ fn drop_last_n_user_turns_preserves_prefix() {
 
     let modalities = default_input_modalities();
     let mut history = create_history_with_items(items);
-    history.drop_last_n_user_turns(1);
+    assert_eq!(history.drop_last_n_user_turns(1), 0);
     assert_eq!(
         history.for_prompt(&modalities),
         vec![
@@ -589,7 +589,7 @@ fn drop_last_n_user_turns_preserves_prefix() {
         user_msg("u2"),
         assistant_msg("a2"),
     ]);
-    history.drop_last_n_user_turns(99);
+    assert_eq!(history.drop_last_n_user_turns(99), 97);
     assert_eq!(
         history.for_prompt(&modalities),
         vec![assistant_msg("session prefix item")]
