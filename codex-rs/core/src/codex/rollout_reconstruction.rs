@@ -137,13 +137,13 @@ impl RolloutReconstructionState {
         let current_reconstruction = self.reconstruct_history(turn_context, current_end);
         let mut history = ContextManager::new();
         history.replace(current_reconstruction.history);
-        let remaining_user_turns = history.drop_last_n_user_turns(additional_user_turns);
+        let undropped_user_turns = history.drop_last_n_user_turns(additional_user_turns);
         let has_older_hidden_history =
             self.replay_state.reverse_resume_index != self.source.start_index();
+        let must_resume_before_current_base =
+            history.raw_items().is_empty() && has_older_hidden_history;
 
-        if remaining_user_turns == 0
-            && (!history.raw_items().is_empty() || !has_older_hidden_history)
-        {
+        if !must_resume_before_current_base {
             let replay_state =
                 resolve_replay_state(&self.source, current_end, additional_user_turns);
             self.replay_state.base_history = history.raw_items().to_vec();
@@ -159,7 +159,7 @@ impl RolloutReconstructionState {
         let replay_state = resolve_replay_state(
             &self.source,
             self.replay_state.reverse_resume_index,
-            remaining_user_turns,
+            undropped_user_turns,
         );
         let reconstructed = reconstruct_history_until(
             turn_context,

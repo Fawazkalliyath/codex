@@ -205,8 +205,8 @@ impl ContextManager {
     /// - if `num_turns` exceeds the number of user turns, all user turns are dropped while
     ///   preserving any items that occurred before the first user message.
     ///
-    /// Returns the remaining number of user turns that could not be dropped because the history
-    /// was exhausted.
+    /// Returns how many additional user turns still need to be dropped after saturating the
+    /// current materialized history.
     pub(crate) fn drop_last_n_user_turns(&mut self, num_turns: u32) -> u32 {
         if num_turns == 0 {
             return 0;
