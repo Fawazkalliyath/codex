@@ -22,7 +22,9 @@ public class RoomAutoDimensionCommand : IExternalCommand
             return Result.Cancelled;
         }
 
-        var rooms = new FilteredElementCollector(doc, activeView.Id)
+        var roomsToProcess = new List<(Room room, RevitLinkInstance? linkInstance)>();
+
+        var hostRooms = new FilteredElementCollector(doc, activeView.Id)
             .OfCategory(BuiltInCategory.OST_Rooms)
             .WhereElementIsNotElementType()
             .Cast<SpatialElement>()
@@ -30,9 +32,32 @@ public class RoomAutoDimensionCommand : IExternalCommand
             .Where(room => room.Area > 0)
             .ToList();
 
-        if (rooms.Count == 0)
+        roomsToProcess.AddRange(hostRooms.Select(room => (room, (RevitLinkInstance?)null)));
+
+        foreach (RevitLinkInstance linkInstance in new FilteredElementCollector(doc)
+            .OfClass(typeof(RevitLinkInstance))
+            .Cast<RevitLinkInstance>())
         {
-            TaskDialog.Show("Auto Room Dimension", "No placed rooms found in the active view.");
+            Document? linkedDoc = linkInstance.GetLinkDocument();
+            if (linkedDoc == null)
+            {
+                continue;
+            }
+
+            foreach (Room room in new FilteredElementCollector(linkedDoc)
+                .OfCategory(BuiltInCategory.OST_Rooms)
+                .WhereElementIsNotElementType()
+                .Cast<SpatialElement>()
+                .OfType<Room>()
+                .Where(room => room.Area > 0))
+            {
+                roomsToProcess.Add((room, linkInstance));
+            }
+        }
+
+        if (roomsToProcess.Count == 0)
+        {
+            TaskDialog.Show("Auto Room Dimension", "No placed rooms found in the active view or linked files.");
             return Result.Cancelled;
         }
 
@@ -40,27 +65,30 @@ public class RoomAutoDimensionCommand : IExternalCommand
         using Transaction tx = new(doc, "Auto dimension rooms");
         tx.Start();
 
-        foreach (Room room in rooms)
+        foreach ((Room room, RevitLinkInstance? linkInstance) in roomsToProcess)
         {
-            createdDimensions += TryDimensionRoom(doc, activeView, room);
+            createdDimensions += TryDimensionRoom(doc, activeView, room, linkInstance);
         }
 
         tx.Commit();
 
         TaskDialog.Show(
             "Auto Room Dimension",
-            $"Processed {rooms.Count} room(s). Created {createdDimensions} dimension(s)."
+            $"Processed {roomsToProcess.Count} room(s). Created {createdDimensions} dimension(s)."
         );
 
         return Result.Succeeded;
     }
 
-    private static int TryDimensionRoom(Document doc, View view, Room room)
+    private static int TryDimensionRoom(Document doc, View view, Room room, RevitLinkInstance? linkInstance = null)
     {
         if (room.Location is not LocationPoint locationPoint)
         {
             return 0;
         }
+
+        Document elementDoc = linkInstance?.GetLinkDocument() ?? doc;
+        Transform? linkTransform = linkInstance?.GetTotalTransform();
 
         SpatialElementBoundaryOptions options = new()
         {
@@ -79,10 +107,11 @@ public class RoomAutoDimensionCommand : IExternalCommand
 
         foreach (BoundarySegment segment in loops.SelectMany(loop => loop))
         {
-            Element? boundaryElement = doc.GetElement(segment.ElementId);
+            Element? boundaryElement = elementDoc.GetElement(segment.ElementId);
             Curve boundaryCurve = segment.GetCurve();
             XYZ curveDirection = (boundaryCurve.GetEndPoint(1) - boundaryCurve.GetEndPoint(0)).Normalize();
             XYZ curveNormal = new(-curveDirection.Y, curveDirection.X, 0);
+            XYZ worldCurveNormal = linkTransform != null ? linkTransform.OfVector(curveNormal) : curveNormal;
 
             if (boundaryElement is Wall wall)
             {
@@ -93,12 +122,14 @@ public class RoomAutoDimensionCommand : IExternalCommand
                         continue;
                     }
 
-                    AddReference(faceReference, face.FaceNormal, doc, seenReferences, xDirectionReferences, yDirectionReferences);
+                    XYZ faceNormal = linkTransform != null ? linkTransform.OfVector(face.FaceNormal) : face.FaceNormal;
+                    Reference hostReference = linkInstance != null ? faceReference.CreateLinkReference(linkInstance) : faceReference;
+                    AddReference(hostReference, faceNormal, doc, seenReferences, xDirectionReferences, yDirectionReferences);
                 }
 
                 foreach (ElementId insertId in wall.FindInserts(true, true, true, true))
                 {
-                    Element? insertElement = doc.GetElement(insertId);
+                    Element? insertElement = elementDoc.GetElement(insertId);
                     if (insertElement is not FamilyInstance instance)
                     {
                         continue;
@@ -121,14 +152,19 @@ public class RoomAutoDimensionCommand : IExternalCommand
                     {
                         foreach (Reference instanceReference in instance.GetReferences(referenceType))
                         {
-                            XYZ referenceNormal = curveNormal;
+                            XYZ referenceNormal = worldCurveNormal;
                             if (instance.GetGeometryObjectFromReference(instanceReference) is PlanarFace instanceFace)
                             {
-                                referenceNormal = instanceFace.FaceNormal;
+                                referenceNormal = linkTransform != null
+                                    ? linkTransform.OfVector(instanceFace.FaceNormal)
+                                    : instanceFace.FaceNormal;
                             }
 
+                            Reference hostReference = linkInstance != null
+                                ? instanceReference.CreateLinkReference(linkInstance)
+                                : instanceReference;
                             AddReference(
-                                instanceReference,
+                                hostReference,
                                 referenceNormal,
                                 doc,
                                 seenReferences,
@@ -144,18 +180,22 @@ public class RoomAutoDimensionCommand : IExternalCommand
                 Reference? separatorReference = curveElement.GeometryCurve.Reference ?? boundaryCurve.Reference;
                 if (separatorReference != null)
                 {
-                    AddReference(separatorReference, curveNormal, doc, seenReferences, xDirectionReferences, yDirectionReferences);
+                    Reference hostReference = linkInstance != null ? separatorReference.CreateLinkReference(linkInstance) : separatorReference;
+                    AddReference(hostReference, worldCurveNormal, doc, seenReferences, xDirectionReferences, yDirectionReferences);
                 }
             }
             else if (boundaryCurve.Reference != null)
             {
-                AddReference(boundaryCurve.Reference, curveNormal, doc, seenReferences, xDirectionReferences, yDirectionReferences);
+                Reference hostReference = linkInstance != null ? boundaryCurve.Reference.CreateLinkReference(linkInstance) : boundaryCurve.Reference;
+                AddReference(hostReference, worldCurveNormal, doc, seenReferences, xDirectionReferences, yDirectionReferences);
             }
         }
 
+        XYZ origin = linkTransform?.OfPoint(locationPoint.Point) ?? locationPoint.Point;
+
         int created = 0;
-        created += CreateDimensionIfPossible(doc, view, locationPoint.Point, xDirectionReferences, XYZ.BasisX);
-        created += CreateDimensionIfPossible(doc, view, locationPoint.Point, yDirectionReferences, XYZ.BasisY);
+        created += CreateDimensionIfPossible(doc, view, origin, xDirectionReferences, XYZ.BasisX);
+        created += CreateDimensionIfPossible(doc, view, origin, yDirectionReferences, XYZ.BasisY);
         return created;
     }
 

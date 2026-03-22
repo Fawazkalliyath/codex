@@ -4,7 +4,7 @@ This plugin adds a **one-click external command** that auto-dimensions every pla
 
 ## What it does
 
-- Collects all placed rooms in the active view.
+- Collects all placed rooms in the active view, including rooms inside linked Revit files.
 - Reads room boundaries from walls, room-separator lines, and other boundary curves.
 - Uses interior wall faces plus door/window opening references on boundary walls when available.
 - Creates face-to-face dimensions (horizontal and vertical where possible) through each room center.
@@ -41,3 +41,4 @@ dotnet build .\RoomAutoDimension.csproj -c Release
 - Some family types may not expose left/right/front/back references, so openings can vary by family content quality.
 - Curved or unusual boundaries may produce fewer dimensions.
 - Existing dimensions are not removed or updated.
+- Rooms in linked files are dimensioned using link-context references; link instances that are not loaded at run time are skipped.
