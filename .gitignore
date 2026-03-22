@@ -7,6 +7,10 @@ node_modules
 # Keep pnpm-lock.yaml
 !pnpm-lock.yaml
 
+# C# build artifacts
+revit-room-auto-dimension/obj/
+revit-room-auto-dimension/bin/
+
 # build
 dist/
 bazel-*
