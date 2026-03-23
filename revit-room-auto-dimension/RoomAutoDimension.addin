@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<RevitAddIns>
+  <AddIn Type="Command">
+    <Name>Room Auto Dimension</Name>
+    <Assembly>C:\RevitPlugins\RoomAutoDimension\RoomAutoDimension.dll</Assembly>
+    <AddInId>7A8F96FC-9B22-4AE3-B7D8-81082454740A</AddInId>
+    <FullClassName>RoomAutoDimension.RoomAutoDimensionCommand</FullClassName>
+    <VendorId>OPENAI</VendorId>
+    <VendorDescription>One-click room wall-face-to-face dimensioning.</VendorDescription>
+    <Text>Auto Dimension Rooms</Text>
+    <VisibilityMode>AlwaysVisible</VisibilityMode>
+  </AddIn>
+</RevitAddIns>
