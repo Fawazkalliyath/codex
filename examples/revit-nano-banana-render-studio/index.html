@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Revit Nano Banana Pro Render Studio</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="layout">
+      <section class="panel controls">
+        <header>
+          <h1>Revit → Nano Banana Pro</h1>
+          <p class="subheading">Sync active 3D view, enrich with natural language, and generate ultra-realistic renders.</p>
+        </header>
+
+        <div class="status-row">
+          <span id="connectionStatus" class="status disconnected">Disconnected</span>
+          <button id="syncView">Sync Active Revit 3D View</button>
+        </div>
+
+        <label for="viewMetadata">Active/Selected 3D View Metadata (JSON)</label>
+        <textarea id="viewMetadata" rows="6" spellcheck="false"></textarea>
+
+        <label for="userIntent">User intent / recommendation text (any language)</label>
+        <textarea
+          id="userIntent"
+          rows="4"
+          placeholder="Example (Hindi/Spanish/English): Modern tower, evening rain reflections, cinematic street activity, premium materials."
+        ></textarea>
+
+        <div class="recommend-actions">
+          <button id="aiRecommend" type="button">AI Recommend Final Prompt</button>
+          <button id="clearIntent" type="button" class="ghost">Clear</button>
+        </div>
+
+        <label for="promptBox">Final optimized Nano Banana Pro prompt</label>
+        <textarea
+          id="promptBox"
+          rows="5"
+          placeholder="AI will convert natural language into a production-ready render prompt. You can still edit manually."
+        ></textarea>
+
+        <h2>Ultra-realistic presets</h2>
+        <div id="presetList" class="preset-grid"></div>
+
+        <h2>Composition options</h2>
+        <div class="group">
+          <label for="ratio">Aspect ratio</label>
+          <select id="ratio">
+            <option>16:9</option>
+            <option>4:3</option>
+            <option>1:1</option>
+            <option>9:16</option>
+            <option>21:9</option>
+          </select>
+        </div>
+
+        <div class="group triple">
+          <label><input type="checkbox" value="trees" class="asset" checked /> Trees</label>
+          <label><input type="checkbox" value="plants" class="asset" checked /> Plants</label>
+          <label><input type="checkbox" value="humans" class="asset" checked /> Humans</label>
+        </div>
+
+        <div class="group">
+          <label for="style">Style family</label>
+          <select id="style">
+            <option>Ultra Realistic</option>
+            <option>Architectural Editorial</option>
+            <option>Cinematic Exterior</option>
+            <option>Minimal Scandinavian</option>
+            <option>Future Metropolis</option>
+          </select>
+        </div>
+
+        <div class="group">
+          <label for="quality">Render quality</label>
+          <select id="quality">
+            <option selected>High</option>
+            <option>Ultra</option>
+          </select>
+        </div>
+
+        <h2>Smart + Futuristic options</h2>
+        <div class="smart-grid">
+          <label><input type="checkbox" value="smartLighting" class="smart-option" checked /> Smart lighting balance</label>
+          <label><input type="checkbox" value="smartMaterials" class="smart-option" checked /> Smart material enhancement</label>
+          <label><input type="checkbox" value="smartComposition" class="smart-option" checked /> Smart framing and composition</label>
+          <label><input type="checkbox" value="smartVegetation" class="smart-option" /> Smart vegetation density</label>
+          <label><input type="checkbox" value="futuristicMood" class="smart-option" /> Futuristic mood booster</label>
+          <label><input type="checkbox" value="futureTransit" class="smart-option" /> Futuristic mobility layer</label>
+        </div>
+
+        <div class="actions">
+          <button id="generate">Generate Preview</button>
+          <button id="download" disabled>Download</button>
+        </div>
+      </section>
+
+      <section class="panel preview">
+        <h2>Preview</h2>
+        <img id="previewImage" alt="Render preview" />
+        <h3>AI recommendation notes</h3>
+        <p id="recommendationNotes" class="notes">Press “AI Recommend Final Prompt” to auto-generate a rich prompt.</p>
+        <h3>Generated payload</h3>
+        <pre id="payloadOutput"></pre>
+      </section>
+    </main>
+
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>
